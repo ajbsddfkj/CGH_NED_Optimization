@@ -1,0 +1,6 @@
+*.mat 
+*.asv 
+results/* 
+!results/.gitkeep 
+data/* 
+!data/.gitkeep 
