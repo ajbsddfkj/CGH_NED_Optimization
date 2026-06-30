@@ -52,27 +52,42 @@ Y = gpuArray(single(Y));
 % Pre-alokacja macierzy losowych faz Z WYPRZEDZENIEM (nie w pętli!)
 random_phases = gpuArray.rand(py, px, N_holograms, 'single') * single(2 * pi);
 
-% przykładowy chunk (np.  1000 punktów na raz)
-chunk_size = 1000;
+% Twoja wcześniejsza inicjalizacja (X, Y, random_phases, k, d_pointCloud) pozostaje bez zmian.
+
+holograms
+
+% Zmniejszamy paczkę do np. 50 punktów. Taka wielkość pozwoli
+% na utworzenie macierzy [2160, 3840, 50] o wadze ok. 1.6 GB w VRAM.
+mini_chunk_size = 50;
 num_points = size(d_pointCloud, 1);
 
-% inicjalizacja sumy dla N hologramów
-holograms = complex(zeros(py, px, N_holograms, 'single', 'gpuArray'));
+disp('Rozpoczęcie równoległej generacji CGH na GPU...');
 
-%pętla po punktach (chunkami, aby nie zabić pamięci)
-for i = 1:chunk_size:num_points
-	idx = i:min(i+chunk_size-1, num_points);
-	points = d_pointCloud(idx, :);
-	
-	for p_idx = 1:size(points, 1)
-		p = points(p_idx, :);
-		r_ij = sqrt( (X - p(1) ).^2 + (Y - p(2)).^2 + p(3)^2 );
-
-        base_field = exp(1i * k * r_ij);
-        
-		% dodawanie układu punktu do każdego z N hologramów
-		holograms = holograms + (base_field .*  exp(1i * random_phases));
-	end
+% Pętla po mini-chunkach
+for i = 1:mini_chunk_size:num_points
+    idx = i:min(i+mini_chunk_size-1, num_points);
+    points = d_pointCloud(idx, :); % Pobranie punktów
+   
+    % Wektoryzacja wymiaru trzeciego [1, 1, M]
+    % Wypychamy współrzędne punktów w "głąb" (na trzeci wymiar macierzy)
+    px_coord = reshape(points(:, 1), 1, 1, []);
+    py_coord = reshape(points(:, 2), 1, 1, []);
+    pz_coord = reshape(points(:, 3), 1, 1, []);
+   
+    % MATEMATYKA RÓWNOLEGŁA (GPU robi to w jednym takcie)
+    % r_ij staje się macierzą o wymiarach: [2160, 3840, rozmiar_mini_chunka]
+    r_ij = sqrt((X - px_coord).^2 + (Y - py_coord).^2 + pz_coord.^2);
+   
+    % Wyliczenie fali dla wszystkich 50 punktów naraz
+    base_field_3d = exp(1i * k * r_ij);
+   
+    % Sumujemy wszystkie fale z wymiaru 3 (redukcja do płaskiej macierzy [2160, 3840])
+    % Uwalniamy cenną pamięć na karcie graficznej
+    summed_base_field = sum(base_field_3d, 3);
+   
+    % Na koniec: aplikacja unikalnych szumów fazowych na wektor 10 hologramów
+    % Mnożenie (N_holograms) załatwia Broadcasting
+    holograms = holograms + (summed_base_field .* exp(1i * random_phases));
 end
 
 disp('Generacja zakończona.');
